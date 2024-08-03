@@ -1,0 +1,180 @@
+---
+title: "dpa_result_part"
+author: "DIVYA CHINTALA (A20561001)"
+date: "2024-07-26"
+output: html_document
+---
+
+
+```{r}
+
+#write.csv(data.frame(results$variables), file = "rfe_results_variables.csv", row.names = FALSE)
+ #write.csv(data.frame(results$results), file = "rfe_results_results.csv", row.names = FALSE)
+
+rfe_results_variables <- read.csv("rfe_results_variables.csv", header = TRUE)
+rfe_results_results <- read.csv("rfe_results_results.csv", header = TRUE)
+print(rfe_results_results)
+
+##below are the copied values of Accuracy from results$results
+
+RFE_acc = c(0.869431951 
+,0.848321599
+, 0.850994757
+, 0.905140123
+, 0.926730159
+, 0.944686211
+, 0.956819031
+, 0.960383398
+, 0.962919476
+, 0.964427311
+, 0.965112524
+, 0.965112618
+, 0.966483514
+, 0.966757628
+, 0.96607218
+, 0.966415115
+, 0.966552148
+)
+RFE_var = c(names(train_data_woh_oversampled[, -ncol(train_data_woh_oversampled)]))
+
+sort_df <- data.frame(RFE_var, RFE_acc)
+cat("before descending sort\n")
+print(sort_df)
+```
+
+After sorting feature variables based on Accuracy
+```{r}
+sort_df <- sort_df[order(sort_df$RFE_acc,decreasing=TRUE), ]
+print(sort_df)
+```
+
+Number of features vs Accuracy plot.
+We can see accuracy increased drastically initially as more feature variables are added later on it became almost same
+```{r}
+plot(x = RFE_acc, y = c(1:17), col="red", xlab = "accuracy", ylab = "Number of features", pch=9)
+```
+The function "varImpPlot" uses two metrics, MeanDecreaseAccuracy (MDA) and MeanDecreaseGini (MDG), to measure the importance of features. MDA measures the decrease in accuracy when a single variable is excluded or changed, while MDG measures the decrease in node impurity.
+```{r}
+varimp<-varImpPlot(rf_model, sort = TRUE, n.var = 17, main = 'Features Importance by random forest')
+cat("\nThis shows that feature variables like Page values is most important one. Other than this few of the other important feature variables are Month, ExitRates, ProductRelated_Duration")
+cat("\n\nIn both plots we see Visitor Type and Special Day is least significant")
+```
+```{r}
+
+
+imp <- importance(rf_model, type = 1)
+cat("Feature variable importance tabel")
+print(imp)
+```
+
+```{r}
+top_features <- row.names(imp)[order(imp[,1], decreasing = TRUE)]
+
+top_features<-top_features[1:10]
+cat("\n\nTop 10 features are:",top_features)
+
+top_features <- c(top_features, "Revenue")
+
+
+cat("Training Random forest based on top 10 features")
+train_data_woh_top_10_features <- train_data_woh_oversampled[, top_features]
+
+# Train the random forest model using the top features
+m = ceiling(log2(10))
+rf_model_top_10_features <- randomForest(as.factor(train_data_woh_top_10_features$Revenue) ~ ., data = train_data_woh_top_10_features, ntree = 100, mtry = m,importance=TRUE,proximity=TRUE)
+
+test_woh_top_10_features<-test_woh[, top_features]
+
+random_forst_pred_top_10<-predict(rf_model_top_10_features,newdata=test_woh_top_10_features)
+
+CM_RF_top_10 <- confusionMatrix(random_forst_pred_top_10, factor(test_woh_top_10_features$Revenue))
+print(CM_RF_top_10)
+cat("Thus accuracy of random forest on top 10 feature variable is 89.3%\n","\nWhereas random forest on all feature variable is 89.81%\n","\nBut such a small difference in accuracy is acceptable as model complexity has decreased.")
+```
+Support vector machine
+```{r}
+library(e1071)
+print("Linear kernel SVM")
+svm_model = svm(as.factor(Revenue)~., data = train_data_oh_oversampled, kernel = "linear", scale = FALSE)
+
+svm_linear_pred <- predict(svm_model, newdata = test_data_oh)
+
+```
+```{r}
+svm_linear_pred_CM <- confusionMatrix(svm_linear_pred, factor(test_data_oh$Revenue))
+print(svm_linear_pred_CM)
+```
+
+```{r}
+print("Radial kernel SVM")
+svm_model = svm(as.factor(Revenue)~., data=train_data_oh_oversampled, kernel = "radial", scale = FALSE)
+
+
+svm_radial_pred <- predict(svm_model, newdata = test_data_oh)
+
+```
+```{r}
+svm_radial_pred_CM <- confusionMatrix(svm_radial_pred, factor(test_data_oh$Revenue))
+print(svm_radial_pred_CM)
+```
+```{r}
+cat("\nAccuracy of SVM using linear kernel=86.76%")
+cat("\nAccuracy of SVM using Radial basis kernel=87.43%")
+cat("\nUsing Radial basis kernel in SVM improves accuracy by marginal percentage.")
+```
+
+XGBoost
+```{r}
+suppressWarnings(library(xgboost))
+library(caret)
+library(dplyr)
+
+
+train_xg <- train_data_woh_top_10_features
+test_xg <- test_woh_top_10_features
+
+tr<-data.matrix(train_xg [,-11])
+te<-data.matrix(test_xg [,-11])
+
+train_labels <- as.numeric(as.character(train_xg[,11]))
+test_labels <- as.numeric(as.character(test_xg[,11]))
+
+
+levels(test_labels)
+
+dtrain <- xgb.DMatrix(data = tr, label = train_labels)
+
+dtest <- xgb.DMatrix(data = te, label = test_labels)
+
+
+params <- list(
+  objective = "binary:logistic",
+  eta = 0.3,
+  max_depth = 6,
+  eval_metric = "auc"
+)
+
+# Train the model
+xgb_model <- xgb.train(
+  params,
+  dtrain,
+  nrounds = 100,
+  watchlist = list(train = dtrain, test = dtest),
+  early_stopping_rounds = 10,
+  verbose = TRUE
+)
+
+
+predictions <- predict(xgb_model, dtest)
+pred_labels_factor <- factor(ifelse(predictions > 0.5, "1", "0"), levels = c("0", "1"))
+
+test_labels_factor <- factor(test_labels, levels = c(0, 1))
+
+confusion_matrix <- confusionMatrix(pred_labels_factor, test_labels_factor)
+cat(sprintf("Test accuracy: %f\n", confusion_matrix$overall[1]))
+```
+
+
+
+
+
